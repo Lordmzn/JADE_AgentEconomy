@@ -33,7 +33,7 @@ import javax.swing.JTextField;
 
 public class EconomicAgent extends Agent {
 	// Delay between each bid proposal
-	private final static int DELAY = 10000;
+	private final static int DELAY = 2000;
 	
 	// The quantities of goods owned by the agent
 	public enum GoodType {
@@ -46,7 +46,7 @@ public class EconomicAgent extends Agent {
 	private int[] coefficients;
 	
 	// Prices: for each good, how many others are asked for
-	private Map<GoodType, Map<GoodType, Integer>> prices;
+	private Map<GoodType, Map<GoodType, Integer>> prices; 
 
 	// The list of known seller agents
 	private AID[] sellerAgents;
@@ -142,7 +142,7 @@ public class EconomicAgent extends Agent {
 			int i = 0;
 			for (; i < 2*nGoods; i++) {
 				coefficients[i] = Integer.valueOf(args[i].toString());
-				prodRule += " " + coefficients[i] + " * " + GoodType.values()[i%nGoods];
+				prodRule += " + " + coefficients[i] + " * " + GoodType.values()[i%nGoods];
 				if (i == nGoods - 1) {
 					prodRule += " =";
 				}
@@ -183,9 +183,7 @@ public class EconomicAgent extends Agent {
 		logProperty();
 
 		// do a first round of production
-		while (produceGood()) {
-			System.out.println(getAID().getLocalName() + ": Lavoro, lavoro, sempre lavoro");
-		}
+		produceGood();
 
 		// Add the behaviour to serve queries from buyer agents
 		addBehaviour(new ServeIncomingRequestsToBuyGoods());
@@ -269,7 +267,7 @@ public class EconomicAgent extends Agent {
 				if (property.get(good) > 0) {
 					soldGood(good); // we sold good good, very good!
 					reply.setPerformative(ACLMessage.INFORM);
-					System.out.println(good+" sold to agent "+msg.getSender().getName()+" for "+prices.get(good));
+					System.out.println(good+" sold to agent "+msg.getSender().getLocalName()+" for "+prices.get(good));
 				}
 				else {
 					// The requested good has been sold to another buyer in the meanwhile .
@@ -301,23 +299,17 @@ public class EconomicAgent extends Agent {
 		private GoodType targetGood;
 
 		public void onStart() {
+			targetGood = GoodType.values()[0];
 			List<GoodType> targetGoods = new ArrayList<GoodType>();
 			int i = 0;
 			for (GoodType g : GoodType.values()) {
 				// if I can't produce it but I need it to produce and I don't have many
-				if (coefficients[i] == 0 && coefficients[i+GoodType.values().length] != 0) {
-					targetGoods.add(g);
+				if (coefficients[i] == 0 && property.get(g) < property.get(targetGood)) {
+					targetGood = g;
 				}
 				i++;
 			}
-			if (targetGoods.size() > 0) { 
-				targetGood = targetGoods[0];
-				for (GoodType g : GoodType.values()) {
-					if (property.get(g) < property.get(targetGood)) {
-						targetGood = g;
-					}
-				}
-			}
+			System.out.println(getAID().getLocalName()+" wants "+targetGood);
 		}
 
 		public void action() {
@@ -426,9 +418,7 @@ public class EconomicAgent extends Agent {
 			}
 		}
 		logProperty();
-		while (produceGood()) {
-			System.out.println(getAID().getLocalName() + ": Lavoro, lavoro, sempre lavoro");
-		}
+		produceGood();
 	}
 
 	private void soldGood(GoodType good) {
@@ -440,29 +430,41 @@ public class EconomicAgent extends Agent {
 			property.put(good, 0); // shouldn't happen, but who knows
 		}
 		logProperty();
-		while (produceGood()) {
-			System.out.println(getAID().getLocalName() + ": Lavoro, lavoro, sempre lavoro");
-		}
+		produceGood();
 	}
 
-	private boolean produceGood() {
-		// check if we can produce
-		int i = GoodType.values().length;
-		for (GoodType g : GoodType.values()) {
-			if (property.get(g) < coefficients[i]) {
-				return false; // I miss at least a unit of g
+	private void produceGood() {
+		boolean keepProducing = true;
+		while (keepProducing) {
+			// check if we can produce
+			int i = GoodType.values().length;
+			for (GoodType g : GoodType.values()) {
+				if (property.get(g) < coefficients[i]) {
+					keepProducing = false;
+					break; // I miss at least a unit of g
+				}
+				i++;
 			}
-			i++;
+			// we can. so look at productions
+			String msg = getAID().getLocalName()+" produces ";
+			for (i = 0; i < GoodType.values().length; ++i) {
+				if (coefficients[i] > 0) {
+					GoodType g = GoodType.values()[i];
+					property.put(g, property.get(g) + coefficients[i]); // these are produced
+					msg += "( "+coefficients[i]+" of "+g+") ";
+				}
+			}
+			msg += "with ";
+			for (; i < GoodType.values().length*2; ++i) {
+				if (coefficients[i] > 0) {
+					GoodType g = GoodType.values()[i - GoodType.values().length];
+					property.put(g, property.get(g) - coefficients[i]); // these are spent in the production
+					msg += "( "+coefficients[i]+" of "+g+") ";
+				}
+			}
+			System.out.println(msg);
+			logProperty();
 		}
-		// we can. so:
-		i = 0;
-		for (GoodType g : GoodType.values()) {
-			property.put(g, property.get(g) + coefficients[i]); // these are produced
-			property.put(g, property.get(g) - coefficients[i + GoodType.values().length]); // these are spent in the production
-			i++;
-		}
-		logProperty();
-		return true;
 	}
 	
 	private void logProperty() {
