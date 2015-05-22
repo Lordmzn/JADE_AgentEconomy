@@ -25,28 +25,30 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Random;
 import javax.swing.JFrame;
 import javax.swing.JLabel;
 import javax.swing.JPanel;
 import javax.swing.JTextField;
 
-
 public class EconomicAgent extends Agent {
 	// Delay between each bid proposal
-	private final static int DELAY = 2000;
+	private final static int BASE_DELAY = 2000;
 	
 	// The quantities of goods owned by the agent
 	public enum GoodType {
  		BREAD, GRAIN, LAND;
  	}
 	private Map<GoodType, Integer> property;
+	private int satisfaction_threshold = 0;
 
 	// Coefficients of linear equation of production: outputs = inputs
 	// c1 * q1 + c2 * q2 = c1 * q1 + c2 * q2  (in case of GoodType.values().length = 2)
 	private int[] coefficients;
 	
 	// Prices: for each good, how many others are asked for
-	private Map<GoodType, Map<GoodType, Integer>> prices; 
+	private Map<GoodType, Map<GoodType, Double>> prices;
+	private final static Double alfa = 0.25; // learning rate
 
 	// The list of known seller agents
 	private AID[] sellerAgents;
@@ -60,13 +62,13 @@ public class EconomicAgent extends Agent {
 		int nGoods = GoodType.values().length;
 		property =  new HashMap<GoodType,Integer>();
 		coefficients = new int[2 * nGoods];
-		prices = new HashMap<GoodType, Map<GoodType, Integer>>();
+		prices = new HashMap<GoodType, Map<GoodType, Double>>();
 		// init
 		for (GoodType g : GoodType.values()) {
 			property.put(g, 0);
-			prices.put(g, new HashMap<GoodType, Integer>());
+			prices.put(g, new HashMap<GoodType, Double>());
 			for (GoodType go : GoodType.values()) {
-				prices.get(g).put(go, 0);
+				prices.get(g).put(go, 0.0);
 			}
 		}
 
@@ -89,32 +91,40 @@ public class EconomicAgent extends Agent {
 		gui.showGui();
 
 		// Add a TickerBehaviour that schedules a request to seller agents every ten seconds
-		addBehaviour(new TickerBehaviour(this, DELAY) {
+		addBehaviour(new TickerBehaviour(this, BASE_DELAY) {
 			protected void onTick() {
-				// Update the list of seller agents
-				DFAgentDescription template = new DFAgentDescription();
-				ServiceDescription sd = new ServiceDescription();
-				sd.setType("good-selling");
-				template.addServices(sd);
-				try {
-					DFAgentDescription[] result = DFService.search(myAgent, template); 
-					System.out.println("Found the following seller agents:");
-					List<AID> temp = new ArrayList<AID>(); // I cannot sell to myself
-					for (DFAgentDescription res : result) {
-						if (!res.getName().equals(getAID().getName())) {
-							temp.add(res.getName());
-							System.out.println(temp.get(temp.size() - 1).getName());
+				// Feel the capitalism:
+				Random randomGenerator = new Random();
+				int satisfaction = 0;
+				for (GoodType g : GoodType.values()) {
+					satisfaction += property.get(g);
+				}
+				if (randomGenerator.nextInt(satisfaction) < satisfaction_threshold * satisfaction_threshold) {
+					// Update the list of seller agents
+					DFAgentDescription template = new DFAgentDescription();
+					ServiceDescription sd = new ServiceDescription();
+					sd.setType("good-selling");
+					template.addServices(sd);
+					try {
+						DFAgentDescription[] result = DFService.search(myAgent, template); 
+						System.out.println("Found the following seller agents:");
+						List<AID> temp = new ArrayList<AID>();
+						for (DFAgentDescription res : result) {
+							if (!res.getName().equals(getAID().getName())) { // I cannot sell to myself
+								temp.add(res.getName());
+								System.out.println(temp.get(temp.size() - 1).getName());
+							}
 						}
+						sellerAgents = new AID[temp.size()];
+						temp.toArray(sellerAgents);
 					}
-					sellerAgents = new AID[temp.size()];
-					temp.toArray(sellerAgents);
-				}
-				catch (FIPAException fe) {
-					fe.printStackTrace();
-				}
+					catch (FIPAException fe) {
+						fe.printStackTrace();
+					}
 
-				// Perform the request
-				myAgent.addBehaviour(new BuySomething());
+					// Perform the request
+					myAgent.addBehaviour(new BuySomething());
+				}	
 			}
 		} );
 
@@ -139,6 +149,7 @@ public class EconomicAgent extends Agent {
 		if (args != null && args.length == 3*nGoods) {
 			
 			String prodRule = "Production rule is: ";
+			int defaultPrice = 0;
 			int i = 0;
 			for (; i < 2*nGoods; i++) {
 				coefficients[i] = Integer.valueOf(args[i].toString());
@@ -146,16 +157,27 @@ public class EconomicAgent extends Agent {
 				if (i == nGoods - 1) {
 					prodRule += " =";
 				}
+				if (coefficients[i] > defaultPrice) {
+					defaultPrice = coefficients[i];
+				}
 			}
 			System.out.println(prodRule);
 
-			// we use material needed for production as prices of what we can produce (greedy approx)
+			// init
+			for (GoodType g : GoodType.values()) {
+				prices.put(g, new HashMap<GoodType, Double>());
+				for (GoodType go : GoodType.values()) {
+					prices.get(g).put(go, 0.0);
+				}
+			}
+
+			// we use 2x material needed for production as prices of what we can produce
 			String prices_str = "Initial prices:\n";
 			for (int j = 0; j < nGoods; j++) {
 				if (coefficients[j] > 0) {
 					prices_str += GoodType.values()[j] + ": ";
 					for (int k = 0; k < nGoods; k++) {
-						prices.get(GoodType.values()[j]).put(GoodType.values()[k], coefficients[k+nGoods]);
+						prices.get(GoodType.values()[j]).put(GoodType.values()[k], (double) (2 * coefficients[k+nGoods]));
 						if (coefficients[k+nGoods] > 0) {
 							prices_str += coefficients[k+nGoods] + " " + GoodType.values()[k] + " + ";
 						}
@@ -168,6 +190,7 @@ public class EconomicAgent extends Agent {
 			String portfolio = "Initial portfolio:";
 			for (GoodType g : GoodType.values()) {
 				property.put(g, Integer.valueOf(args[i].toString()));
+				satisfaction_threshold += property.get(g);
 				portfolio += " (" + g + ": " + property.get(g) + ")";
 				i++;
 			}
@@ -230,7 +253,7 @@ public class EconomicAgent extends Agent {
 				if (property.get(good) > 0) {
 					// The requested good is available for sale. Reply with the price
 					reply.setPerformative(ACLMessage.PROPOSE);
-					reply.setContent(Arrays.toString(prices.get(good).values().toArray(new Integer[0])));
+					reply.setContent(Arrays.toString(prices.get(good).values().toArray(new Double[0])));
 				}
 				else {
 					// The requested good is NOT available for sale.
@@ -290,8 +313,8 @@ public class EconomicAgent extends Agent {
 	 **/
 	private class BuySomething extends Behaviour {
 		private AID bestSeller; // The agent who provides the best offer 
-		private int bestPrice = 0;  // The best offered price
-		private int[] bestPrices;
+		private Double bestPrice = 0.0;  // The best offered price
+		private Double[] bestPrices;
 		private int repliesCnt = 0; // The counter of replies from seller agents
 		private MessageTemplate mt; // The template to receive replies
 		private int step = 0;
@@ -299,16 +322,9 @@ public class EconomicAgent extends Agent {
 		private GoodType targetGood;
 
 		public void onStart() {
-			targetGood = GoodType.values()[0];
-			List<GoodType> targetGoods = new ArrayList<GoodType>();
-			int i = 0;
-			for (GoodType g : GoodType.values()) {
-				// if I can't produce it but I need it to produce and I don't have many
-				if (coefficients[i] == 0 && property.get(g) < property.get(targetGood)) {
-					targetGood = g;
-				}
-				i++;
-			}
+			Random randomGenerator = new Random();
+      		int randomGood = randomGenerator.nextInt(GoodType.values().length);
+			targetGood = GoodType.values()[randomGood];
 			System.out.println(getAID().getLocalName()+" wants "+targetGood);
 		}
 
@@ -337,16 +353,22 @@ public class EconomicAgent extends Agent {
 					if (reply.getPerformative() == ACLMessage.PROPOSE) {
 						// This is an offer 
 						String[] strings = reply.getContent().replace("[", "").replace("]", "").split(", ");
-    					int total_price = 0; // disregard my property distribution
+						boolean canIBuy = true;
+    					Double total_price = 0.0;
     					for (int i = 0; i < strings.length; i++) {
-      						total_price += Integer.parseInt(strings[i]);
+    						Double price = Double.parseDouble(strings[i]);
+    						GoodType good = GoodType.values()[i];
+    						if (property.get(good) < price) {
+    							canIBuy = false;
+    						}
+      						total_price += price;
     					}
-						if (bestSeller == null || total_price < bestPrice) {
+						if (canIBuy && (bestSeller == null || total_price < bestPrice)) {
 							// This is the best offer at present: keep it
 							bestPrice = total_price;
-							bestPrices = new int[strings.length];
+							bestPrices = new Double[strings.length];
     						for (int i = 0; i < strings.length; i++) {
-      							bestPrices[i] = Integer.parseInt(strings[i]);
+      							bestPrices[i] = Double.parseDouble(strings[i]);
     						}
 							bestSeller = reply.getSender();
 						}
@@ -381,11 +403,7 @@ public class EconomicAgent extends Agent {
 					// Purchase order reply received
 					if (reply.getPerformative() == ACLMessage.INFORM) {
 						// Purchase successful. We can terminate
-						int i = 0;
-						for (GoodType g : GoodType.values()) {
-							prices.get(targetGood).put(g, bestPrices[i]);
-							i++;
-						}
+						updatePrices(targetGood, bestPrices);
 						boughtGood(targetGood);
 					}
 					else {
@@ -412,7 +430,8 @@ public class EconomicAgent extends Agent {
 	private void boughtGood(GoodType good) {
 		property.put(good, property.get(good) + 1); // this is bought from the other
 		for (GoodType g : GoodType.values()) {
-			property.put(g, property.get(g) - prices.get(good).get(g)); // these goods goes to the other
+			Double price = prices.get(good).get(g);
+			property.put(g, property.get(g) - price.intValue()); // these goods goes to the other
 			if (property.get(g) < 0) {
 				property.put(g, 0); // shouldn't happen, but who knows
 			}
@@ -423,7 +442,7 @@ public class EconomicAgent extends Agent {
 
 	private void soldGood(GoodType good) {
 		for (GoodType g : GoodType.values()) {
-			property.put(g, property.get(g) + prices.get(good).get(g)); // these goods come from the other
+			property.put(g, property.get(g) + prices.get(good).get(g).intValue()); // these goods come from the other
 		}
 		property.put(good, property.get(good) - 1); // this is sold to the buyer
 		if (property.get(good) < 0) {
@@ -434,37 +453,33 @@ public class EconomicAgent extends Agent {
 	}
 
 	private void produceGood() {
-		boolean keepProducing = true;
-		while (keepProducing) {
-			// check if we can produce
-			int i = GoodType.values().length;
-			for (GoodType g : GoodType.values()) {
-				if (property.get(g) < coefficients[i]) {
-					keepProducing = false;
-					break; // I miss at least a unit of g
-				}
-				i++;
+		// check if we can produce
+		int i = GoodType.values().length;
+		for (GoodType g : GoodType.values()) {
+			if (property.get(g) < coefficients[i]) {
+				return; // I miss at least a unit of g
 			}
-			// we can. so look at productions
-			String msg = getAID().getLocalName()+" produces ";
-			for (i = 0; i < GoodType.values().length; ++i) {
-				if (coefficients[i] > 0) {
-					GoodType g = GoodType.values()[i];
-					property.put(g, property.get(g) + coefficients[i]); // these are produced
-					msg += "( "+coefficients[i]+" of "+g+") ";
-				}
-			}
-			msg += "with ";
-			for (; i < GoodType.values().length*2; ++i) {
-				if (coefficients[i] > 0) {
-					GoodType g = GoodType.values()[i - GoodType.values().length];
-					property.put(g, property.get(g) - coefficients[i]); // these are spent in the production
-					msg += "( "+coefficients[i]+" of "+g+") ";
-				}
-			}
-			System.out.println(msg);
-			logProperty();
+			i++;
 		}
+		// we can. so look at productions
+		String msg = getAID().getLocalName()+" produces ";
+		for (i = 0; i < GoodType.values().length; ++i) {
+			if (coefficients[i] > 0) {
+				GoodType g = GoodType.values()[i];
+				property.put(g, property.get(g) + coefficients[i]); // these are produced
+				msg += "( "+coefficients[i]+" of "+g+") ";
+			}
+		}
+		msg += "with ";
+		for (; i < GoodType.values().length*2; ++i) {
+			if (coefficients[i] > 0) {
+				GoodType g = GoodType.values()[i - GoodType.values().length];
+				property.put(g, property.get(g) - coefficients[i]); // these are spent in the production
+				msg += "( "+coefficients[i]+" of "+g+") ";
+			}
+		}
+		System.out.println(msg);
+		logProperty();
 	}
 	
 	private void logProperty() {
@@ -475,6 +490,15 @@ public class EconomicAgent extends Agent {
 		data_file.println(msg);
 		// update gui
 		gui.updateNumbers();
+	}
+
+	private void updatePrices(GoodType good, Double[] thisPrices) {
+		int i = 0;
+		for (GoodType g : GoodType.values()) {
+			Double new_price = prices.get(good).get(g) + alfa * thisPrices[i];
+			prices.get(good).put(g, new_price);
+			i++;
+		}
 	}
 
 	private class EcononomicAgentGui extends JFrame {	
